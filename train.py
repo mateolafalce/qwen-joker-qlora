@@ -224,6 +224,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Also upload the merged model in 16 bits. About 15 GB.",
     )
+    parser.add_argument(
+        "--merge-repo",
+        default=None,
+        help="Separate repo for the merged weights. Required with --merge-model.",
+    )
     parser.add_argument("--private", action="store_true", help="Create the model repo as private.")
     return parser.parse_args()
 
@@ -301,6 +306,12 @@ def to_text_batch(tokenizer, bos: str):
         return {"text": texts}
 
     return to_text
+
+
+def resolve_merge_repo(output_repo: str, merge_repo: str | None) -> str:
+    if not merge_repo or merge_repo == output_repo:
+        raise ValueError("merged weights need a repo that is not the adapter repo")
+    return merge_repo
 
 
 def hyperparameters_of(args: argparse.Namespace) -> dict:
@@ -884,12 +895,17 @@ def main() -> None:
             logger.error("eval files never reached the Hub: %s", exc)
             sys.exit(1)
     if args.merge_model:
-        print("merging to 16 bits. this lengthens the job and uploads ~15 GB.")
-        card = fetch_readme(args.output_repo)
+        try:
+            merge_repo = resolve_merge_repo(args.output_repo, args.merge_repo)
+        except ValueError as exc:
+            logger.error("%s", exc)
+            sys.exit(1)
+        print(f"merging to 16 bits into {merge_repo}. this lengthens the job and uploads ~15 GB.")
+        card = fetch_readme(merge_repo)
         try:
             call_with_retries(
                 lambda: model.push_to_hub_merged(
-                    args.output_repo,
+                    merge_repo,
                     tokenizer,
                     save_method="merged_16bit",
                     private=args.private,
@@ -901,7 +917,7 @@ def main() -> None:
             logger.error("merge upload failed: %s", exc)
             sys.exit(1)
         try:
-            restore_readme(args.output_repo, card)
+            restore_readme(merge_repo, card)
         except Exception:
             logger.exception("The merged model is uploaded. The model card was not restored.")
     print(f"adapter at https://huggingface.co/{args.output_repo}")

@@ -109,6 +109,16 @@ class ManifestTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             self.train.call_with_retries(always_fail, attempts=2, pause_seconds=0)
 
+    def test_merge_repo_is_separate_from_the_adapter(self):
+        self.assertEqual(
+            self.train.resolve_merge_repo("lafalce/qwen2.5-7b-joker", "lafalce/qwen2.5-7b-joker-merged"),
+            "lafalce/qwen2.5-7b-joker-merged",
+        )
+        with self.assertRaises(ValueError):
+            self.train.resolve_merge_repo("lafalce/qwen2.5-7b-joker", None)
+        with self.assertRaises(ValueError):
+            self.train.resolve_merge_repo("lafalce/qwen2.5-7b-joker", "lafalce/qwen2.5-7b-joker")
+
 
 if __name__ == "__main__":
     unittest.main()

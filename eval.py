@@ -482,6 +482,20 @@ def generate_replies(model_name: str, items: list[dict], max_seq_length: int, ma
     return replies
 
 
+def push_report(repo: str, path: str) -> None:
+    from huggingface_hub import HfApi
+
+    name = Path(path).name
+    HfApi().upload_file(
+        path_or_fileobj=path,
+        path_in_repo=name,
+        repo_id=repo,
+        repo_type="model",
+        commit_message=f"add {name}",
+    )
+    print(f"uploaded {name} to {repo}")
+
+
 def write_report(path: str, model_name: str, items: list[dict], replies: dict[str, str]) -> dict:
     report = score_items(items, replies)
     report["model"] = model_name
@@ -506,6 +520,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-seq-length", type=int, default=1024)
     parser.add_argument("--max-new-tokens", type=int, default=280)
     parser.add_argument("--temperature", type=float, default=0.8)
+    parser.add_argument("--push-repo", help="Upload the written reports to this model repo.")
     return parser.parse_args()
 
 
@@ -524,9 +539,13 @@ def main() -> None:
         if args.base:
             replies = generate_replies(args.base, items, args.max_seq_length, args.max_new_tokens, args.temperature)
             write_report(args.base_report, args.base, items, replies)
+            if args.push_repo:
+                push_report(args.push_repo, args.base_report)
         if args.adapter:
             replies = generate_replies(args.adapter, items, args.max_seq_length, args.max_new_tokens, args.temperature)
             write_report(args.adapter_report, args.adapter, items, replies)
+            if args.push_repo:
+                push_report(args.push_repo, args.adapter_report)
         if args.base and args.adapter:
             compared = compare_reports(read_report(args.base_report), read_report(args.adapter_report))
             print(format_comparison(compared))
@@ -537,6 +556,8 @@ def main() -> None:
         sys.exit("Pass --report for --model.")
     replies = generate_replies(args.model, items, args.max_seq_length, args.max_new_tokens, args.temperature)
     write_report(args.report, args.model, items, replies)
+    if args.push_repo:
+        push_report(args.push_repo, args.report)
 
 
 if __name__ == "__main__":

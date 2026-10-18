@@ -15,10 +15,12 @@ QLoRA fine-tune of Qwen3-8B so it answers as the Joker. The base model stays fro
 ## Layout
 
 - `data/make_joker_jsonl.py` writes the train, val, preference, and eval jsonl. Held-out pairs, multi-turn talks, and eval items live in `data/heldout.py`. Expanded dialogues live in `data/scale.py`. Preferences live in `data/preference_author.py` and must not copy a supervised reply. Edit those, then regenerate. `data/make_joker_jsonl.py --check` fails if the committed jsonl drifted.
-- `data/system_prompt.txt` is the system prompt. The same text must appear in `infer.py` and `eval.py`. `scripts/check_data.py` fails the run if they drift.
+- `data/system_prompt.txt` is the system prompt. The same text must appear in `infer.py`, `eval.py`, and `notebook.ipynb`. `scripts/check_data.py` fails the run if they drift.
 - `data/probe_prompts.txt` holds questions that must stay out of train and val. They also appear in `data/eval_items.jsonl`.
 - `train.py` is the Hugging Face Job script. It runs SFT with early stopping, then DPO, and exits 0 only after the adapter is on the Hub.
-- `eval.py` scores generated replies. Generation needs a GPU. Comparing report files does not. The published result is the delta of base, SFT, and DPO, plus language and dodge rates and a blind preference.
+- `eval.py` scores generated replies. Generation needs a GPU. Comparing report files does not. The published result is the delta of base, SFT, and DPO, plus language and dodge rates and a blind preference. `scripts/apply_eval_reports.py` writes a delta and a few probe replies into `hub/model_card.md`.
+- `notebook.ipynb` is what Colab and Kaggle open from the model repo. The system prompt in it must match `data/system_prompt.txt`.
+- `hub/coverage.py` turns those reports, and the measured A10G job, into model-card text. `scripts/publish_gguf.py` uploads a GGUF only after a merged checkpoint exists in another repo.
 - `requirements.train.txt` and the `uv` blocks pin the same stack. `Dockerfile` installs that file on the PyTorch 2.6 CUDA 12.4 image.
 - `scripts/launch_job.sh` rebuilds the jsonl, checks it, uploads the dataset, and starts one job. `scripts/launch_suite.sh` starts the primary run plus the seed, rank, and Qwen2.5 ablations.
 
