@@ -7,6 +7,6 @@ joker-output/
 .python-version
 *.log
 .hf-cache/
-eval_base.json
-eval_adapter.json
+/eval_base.json
+/eval_adapter.json
 eval-reports/

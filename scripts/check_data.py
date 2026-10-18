@@ -16,6 +16,7 @@ EVAL = DATA / "eval_items.jsonl"
 PROMPT_FILE = DATA / "system_prompt.txt"
 INFER = ROOT / "infer.py"
 EVAL_PY = ROOT / "eval.py"
+NOTEBOOK = ROOT / "notebook.ipynb"
 PROBES = DATA / "probe_prompts.txt"
 
 BANNED = (
@@ -149,7 +150,7 @@ def eval_errors(rows: list[dict], probes: list[str]) -> list[str]:
 
 def main() -> None:
     system = PROMPT_FILE.read_text(encoding="utf-8").strip()
-    for path in (INFER, EVAL_PY):
+    for path in (INFER, EVAL_PY, NOTEBOOK):
         if system not in path.read_text(encoding="utf-8"):
             sys.exit(f"{path.name} does not contain the system prompt from data/system_prompt.txt")
 
