@@ -121,8 +121,14 @@ The training text does aim at a specific voice: sarcasm, a written pause, a joke
 
 Gaps 1 to 3 were published after the audit, from [hub/model_card.md](../hub/model_card.md) and [hub/dataset_card.md](../hub/dataset_card.md), via `scripts/push_hub_cards.py`. The live model page now shows `pipeline_tag: text-generation`, `library_name: peft`, the dataset link, an adapter relation in the model tree, the system prompt, a load example, the training table, and the limitations. "Use this model" offers a PEFT snippet. The dataset repo has a card. Coverage of the checklist after that publish is **7/10**.
 
-Still open, and the reason the SOTA score stays **2/10**: no probe outputs, no base-model baseline, no benchmark, no `.eval_results/`, no Space, no notebook, no CO2 figure, no GGUF. The page still has no download count, and no Inference Provider hosts the adapter.
+A later pass published the three checklist items that do not need a new training run:
+
+- The card shows the base-vs-adapter delta and four real probe replies (a style question, a fact, a Spanish question, and a refusal). Reports are `eval_base.json` and `eval_adapter.json` on the model repo. Overall moved from 0.86 to 0.95. Facts moved the other way, 1.00 to 0.89. Refusal replies that sketched a procedure are withheld. This is one sample at temperature 0.8, not a Hub benchmark, so there is still no `.eval_results/` leaderboard file.
+- `notebook.ipynb` is in the model repo. Use this model opens it in Colab and Kaggle.
+- `co2_eq_emissions` records the training job `6ad4dab15ccb47ba0f7c475a`: 259 running seconds, 0.072 hours, on one A10G large. The figure is 3.97 g, from the ML CO2 Impact eGRID factor for AWS us-east-1 times a 150 W TDP. Jobs do not publish a region, so that grid is an assumption, not a CodeCarbon trace.
+
+That leaves two items, which is why this is not 10/10. The Hub adapter is still the 138-row supervised upload, with no `run_manifest.json`. Git already has the validation split, early stopping, and DPO, and launching that job spends credit, so it was not started. There is no merged checkpoint, so there is no GGUF. `scripts/publish_gguf.py` refuses until a 16-bit merge exists in its own repo. `--merge-model` now requires `--merge-repo` and does not write the merge over the adapter.
+
+The page still has no download count, and no Inference Provider hosts the adapter. The SOTA score stays **2/10** until the retrained adapter is the one on the Hub.
 
 Unsloth replaces `README.md` on `push_to_hub`. `publish` in `train.py` downloads the current card before that upload and writes it back, including after the optional merged upload, so the next training job keeps this text.
-
-`main` now also has a validation split and a DPO stage (150 train rows, 19 val rows, 151 preference rows in git). The Hub weights and `lafalce/qwen-joker-sft` are still the earlier supervised upload: 138 rows, no `run_manifest.json`. The card says so. The SOTA score stays 2/10 until a new run publishes probe outputs and a base-model baseline.

@@ -36,6 +36,26 @@ def main() -> None:
     )
     print(f"model card: https://huggingface.co/{args.model_repo}")
     api.upload_file(
+        path_or_fileobj=str(ROOT / "notebook.ipynb"),
+        path_in_repo="notebook.ipynb",
+        repo_id=args.model_repo,
+        repo_type="model",
+        commit_message="add the colab and kaggle notebook",
+    )
+    print(f"notebook: https://huggingface.co/{args.model_repo}/blob/main/notebook.ipynb")
+    for name in ("eval_base.json", "eval_adapter.json"):
+        path = ROOT / "hub" / name
+        if not path.is_file():
+            continue
+        api.upload_file(
+            path_or_fileobj=str(path),
+            path_in_repo=name,
+            repo_id=args.model_repo,
+            repo_type="model",
+            commit_message=f"add {name}",
+        )
+        print(f"report: https://huggingface.co/{args.model_repo}/blob/main/{name}")
+    api.upload_file(
         path_or_fileobj=str(ROOT / "hub" / "dataset_card.md"),
         path_in_repo="README.md",
         repo_id=args.dataset_repo,

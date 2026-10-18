@@ -51,6 +51,11 @@ docker run --gpus all --env HF_TOKEN \
 
 ## Try it
 
+The model repo ships `notebook.ipynb`. Use this model on the Hub opens it in Colab and Kaggle:
+
+- https://huggingface.co/lafalce/qwen2.5-7b-joker/colab
+- https://huggingface.co/lafalce/qwen2.5-7b-joker/kaggle
+
 On a local GPU, once the adapter is on the Hub:
 
 ```bash
