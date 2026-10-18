@@ -132,3 +132,16 @@ That leaves two items, which is why this is not 10/10. The Hub adapter is still 
 The page still has no download count, and no Inference Provider hosts the adapter. The SOTA score stays **2/10** until the retrained adapter is the one on the Hub.
 
 Unsloth replaces `README.md` on `push_to_hub`. `publish` in `train.py` downloads the current card before that upload and writes it back, including after the optional merged upload, so the next training job keeps this text.
+
+## What a later run has to publish
+
+The training repo can now build that run. It is not on the Hub yet, so this score does not move.
+
+- Base, SFT, and DPO, same system prompt, same `eval_items.jsonl`, greedy. `eval_delta.json` is the result. `run_manifest.json` carries the git sha, the data hashes, and the loss.
+- Ablations: SFT against SFT+DPO inside the primary job, plus another seed, rank 8, and rank 32.
+- Data in git: 2284 train rows, 434 of them multi-turn, 295 validation rows, 960 preferences written by a second script.
+- A blind judge that can fail a thin in-character line the lexical rubric passes.
+- Qwen3-8B as the training base. The Qwen2.5 adapter does not transfer onto it. The shapes are in the manifest.
+- Language rate and dodge rate, with denominators, split by question language and by harm, crime, and self-harm.
+
+`scripts/launch_suite.sh` is the spend. Until those files are on the Hub, the release is still the October 18 adapter.

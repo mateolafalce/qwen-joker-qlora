@@ -33,6 +33,7 @@ BANNED = (
 )
 PREFERENCE_TAGS = {"emoji_spam", "assistant_voice", "wrong_fact"}
 EVAL_KINDS = {"style", "capability", "refusal"}
+REFUSAL_TOPICS = {"harm", "crime", "self_harm"}
 
 
 def load_jsonl(path: Path) -> list[dict]:
@@ -109,6 +110,8 @@ def check_preferences(rows: list[dict], system: str) -> list[str]:
         for phrase in BANNED:
             if phrase in lowered:
                 return [f"preference row {index}: chosen breaks character ({phrase})"]
+        if row.get("author") != "preference":
+            return [f"preference row {index}: author must be preference"]
         tags.add(row["tag"])
     missing = PREFERENCE_TAGS - tags
     if missing:
@@ -119,6 +122,8 @@ def check_preferences(rows: list[dict], system: str) -> list[str]:
 def check_eval(rows: list[dict], probes: list[str]) -> list[str]:
     prompts = []
     ids = []
+    languages = {"en": 0, "es": 0}
+    topics = {topic: 0 for topic in REFUSAL_TOPICS}
     for index, row in enumerate(rows, start=1):
         if row.get("kind") not in EVAL_KINDS:
             return [f"eval row {index}: bad kind"]
@@ -129,6 +134,11 @@ def check_eval(rows: list[dict], probes: list[str]) -> list[str]:
             return [f"eval row {index}: missing id or prompt"]
         if row["kind"] == "capability" and not (row.get("expect_substrings") or row.get("expect_any")):
             return [f"eval row {index}: capability item has no expected answer"]
+        if row["kind"] == "refusal":
+            if row.get("topic") not in REFUSAL_TOPICS:
+                return [f"eval row {index}: refusal needs a harm, crime, or self_harm topic"]
+            topics[row["topic"]] += 1
+        languages[row["language"]] += 1
         prompts.append(prompt)
         ids.append(row["id"])
     if len(ids) != len(set(ids)):
@@ -138,6 +148,11 @@ def check_eval(rows: list[dict], probes: list[str]) -> list[str]:
     missing = sorted(set(probes) - set(prompts))
     if missing:
         return ["probes missing from eval items: " + " | ".join(missing)]
+    thin_topics = [f"{topic}={topics[topic]}" for topic in sorted(topics) if topics[topic] < 8]
+    if thin_topics:
+        return ["eval refusal topics are thin: " + ", ".join(thin_topics)]
+    if languages["en"] < 12 or languages["es"] < 12:
+        return [f"eval language coverage is thin: en={languages['en']} es={languages['es']}"]
     return prompts
 
 
@@ -158,11 +173,11 @@ def main() -> None:
     val = load_jsonl(VAL)
     prefs = load_jsonl(PREFS)
     items = load_jsonl(EVAL)
-    if len(train) < 80:
+    if len(train) < 2000:
         sys.exit(f"too few train examples: {len(train)}")
-    if len(val) < 12:
+    if len(val) < 150:
         sys.exit(f"too few val examples: {len(val)}")
-    if len(prefs) < 20:
+    if len(prefs) < 800:
         sys.exit(f"too few preferences: {len(prefs)}")
 
     train_notes = check_dialogue(train, system, "train")
@@ -173,7 +188,7 @@ def main() -> None:
         sys.exit(val_notes[0])
     train_multiturn = int(train_notes[0].removeprefix("__multiturn__"))
     val_multiturn = int(val_notes[0].removeprefix("__multiturn__"))
-    if train_multiturn < 8:
+    if train_multiturn < 400:
         sys.exit(f"too few multi-turn train rows: {train_multiturn}")
     if val_multiturn < 1:
         sys.exit("val split has no multi-turn row")
@@ -199,8 +214,15 @@ def main() -> None:
 
     pref_train = sum(1 for row in prefs if row["split"] == "train")
     pref_val = sum(1 for row in prefs if row["split"] == "val")
-    if pref_train < 10 or pref_val < 3:
+    if pref_train < 600 or pref_val < 40:
         sys.exit(f"preference split is too small: train {pref_train}, val {pref_val}")
+    supervised = {text for row in [*train, *val] for text in assistant_turns(row)}
+    copied = next(
+        (index for index, row in enumerate(prefs, start=1) if row["chosen"][0]["content"].strip() in supervised),
+        None,
+    )
+    if copied is not None:
+        sys.exit(f"preference chosen text is a supervised reply, row {copied}")
 
     print(
         f"ok: train {len(train)} ({train_multiturn} multi-turn), "

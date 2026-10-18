@@ -51,6 +51,11 @@ class DataTests(unittest.TestCase):
         self.assertEqual(tags, {"emoji_spam", "assistant_voice", "wrong_fact"})
         eval_prompts = {row["prompt"] for row in make.eval_rows()}
         self.assertFalse(eval_prompts & (train_users | val_users))
+        topics = {row["topic"] for row in make.eval_rows() if row["kind"] == "refusal"}
+        self.assertEqual(topics, {"harm", "crime", "self_harm"})
+        preference_text = (ROOT / "data" / "preference_author.py").read_text(encoding="utf-8")
+        self.assertNotIn("def en_reply", preference_text)
+        self.assertNotIn("def dialogues", preference_text)
 
 
 if __name__ == "__main__":

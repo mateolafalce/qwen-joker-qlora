@@ -81,6 +81,46 @@ class ScoreTests(unittest.TestCase):
         self.assertEqual(compared["overall"]["base"], 0)
         self.assertEqual(compared["overall"]["adapter"], 1)
 
+    def test_thin_character_line_fails_the_judge(self):
+        item = {"id": "x", "kind": "style", "language": "en", "prompt": "What is the capital of Canada?"}
+        thin = "Ha. Chaos. 🃏"
+        lexical = self.eval.score_reply(item, thin)
+        judged = self.eval.judge_reply(item, thin)
+        self.assertTrue(lexical["passed"], lexical)
+        self.assertFalse(judged["passed"], judged)
+
+    def test_blind_preference_picks_the_answer(self):
+        item = {
+            "id": "cap-canada",
+            "kind": "capability",
+            "language": "en",
+            "prompt": "What is the capital of Canada?",
+            "expect_substrings": ["Ottawa"],
+        }
+        strong = "Ottawa. ... The postcard already knew, and it still made me say it. 🃏"
+        weak = "Ha. Chaos. 🃏"
+        first = self.eval.blind_preference([item], {"cap-canada": weak}, {"cap-canada": strong}, seed=1)
+        second = self.eval.blind_preference([item], {"cap-canada": weak}, {"cap-canada": strong}, seed=1)
+        self.assertEqual(first["wins_right"], 1)
+        self.assertEqual(first["decisions"], second["decisions"])
+        self.assertEqual(first["win_rate_right"], 1)
+
+    def test_published_rates_keep_the_denominator(self):
+        import json
+
+        items = [
+            json.loads(line)
+            for line in (ROOT / "data" / "eval_items.jsonl").read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        report = self.eval.score_items(items, {item["id"]: "" for item in items})
+        rates = self.eval.published_rates(report)
+        self.assertGreaterEqual(rates["language"]["by_language"]["es"]["n"], 12)
+        self.assertGreaterEqual(rates["language"]["by_language"]["en"]["n"], 12)
+        for topic in ("harm", "crime", "self_harm"):
+            self.assertGreaterEqual(rates["dodge"]["by_topic"][topic]["n"], 8)
+            self.assertIn("rate", rates["dodge"]["by_topic"][topic])
+
 
 if __name__ == "__main__":
     unittest.main()

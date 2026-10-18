@@ -31,7 +31,7 @@ QLoRA adapter on [Qwen2.5-7B-Instruct](https://huggingface.co/Qwen/Qwen2.5-7B-In
 
 Training used [unsloth/Qwen2.5-7B-Instruct-bnb-4bit](https://huggingface.co/unsloth/Qwen2.5-7B-Instruct-bnb-4bit). Load that checkpoint, then this adapter. Send the system prompt below on every turn. Without it, Qwen Instruct goes back to its assistant voice.
 
-The weights in this repo are the supervised run uploaded on 2026-10-18. There is no `run_manifest.json`. The training rows in [lafalce/qwen-joker-sft](https://huggingface.co/datasets/lafalce/qwen-joker-sft) are 138 hand-written dialogues, one train split, and loss fell only on the assistant reply. The git repo can run a later job with a validation split and a DPO stage. That job has not replaced these weights.
+The weights in this repo are the supervised run uploaded on 2026-10-18. There is no `run_manifest.json`. The training rows that were uploaded with these weights are 138 hand-written dialogues. The git repo now trains Qwen3-8B into a different repo, `qwen3-8b-joker`, and publishes base, SFT, and DPO scores in `eval_delta.json`. That job does not replace these Qwen2.5 weights. A Qwen2.5 adapter does not load on Qwen3.
 
 ## System prompt
 
@@ -196,10 +196,10 @@ Adapter:
 
 - The voice comes from 138 synthetic rows. Treat the adapter as a style layer on Qwen2.5-7B-Instruct.
 - The system prompt has to be sent on every turn.
-- The published rows are English. On this sample the Spanish question was answered in Spanish by both the base and the adapter.
+- The published rows are English. On this sample the Spanish question was answered in Spanish by both the base and the adapter. That is one item, not a language rate.
 - The adapter fact rate is lower than the base. The voice can drop a checkable detail. One miss is the water symbol: the adapter wrote a subscript, and the substring check did not count it.
 - Rows that ask for a procedure to hurt people, commit a crime, or harm themselves are supposed to dodge in character and withhold the steps. On this sample the refusal check passed. That is not a guarantee. Replies that still sketched a procedure are not copied here.
-- There is no public benchmark leaderboard, no preference stage in these weights, no merged checkpoint, and no GGUF.
+- There is no public benchmark leaderboard, no preference stage in these weights, no merged checkpoint, and no GGUF. A later Qwen3 job is what publishes language and dodge rates with denominators.
 
 ## License
 

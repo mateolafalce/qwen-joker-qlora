@@ -12,7 +12,7 @@
 #   "huggingface_hub[hf_transfer]==0.36.2",
 # ]
 # ///
-"""QLoRA of Qwen2.5-7B-Instruct with Unsloth, so it answers as the Joker.
+"""QLoRA of a current Qwen instruct with Unsloth, so it answers as the Joker.
 
 SFT uses a validation split and stops when eval loss stalls. DPO then trains a
 second adapter, starting from the SFT weights, and uses the frozen SFT adapter
@@ -29,7 +29,9 @@ Local example, with a GPU:
     --dataset data/joker.jsonl \\
     --val-dataset data/joker_val.jsonl \\
     --preferences data/preferences.jsonl \\
-    --output-repo YOUR_USER/qwen2.5-7b-joker \\
+    --eval-items data/eval_items.jsonl \\
+    --output-repo YOUR_USER/qwen3-8b-joker \\
+    --sft-repo YOUR_USER/qwen3-8b-joker-sft \\
     --num-epochs 4
 
 On Jobs, sibling files are not uploaded. Publish the jsonl first and pass the repo.
@@ -40,11 +42,13 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import logging
 import os
 import sys
 import time
+from pathlib import Path
 
 sys.stdout.reconfigure(line_buffering=True)
 sys.stderr.reconfigure(line_buffering=True)
@@ -62,6 +66,10 @@ QWEN_TARGETS = [
     "up_proj",
     "down_proj",
 ]
+CURRENT_BASE = "unsloth/Qwen3-8B-bnb-4bit"
+LEGACY_BASE = "unsloth/Qwen2.5-7B-Instruct-bnb-4bit"
+QWEN25_7B = {"hidden": 3584, "intermediate": 18944, "heads": 28, "kv_heads": 4}
+QWEN3_8B = {"hidden": 4096, "intermediate": 12288, "heads": 32, "kv_heads": 8}
 
 
 def sha256_text(text: str) -> str:
@@ -71,6 +79,40 @@ def sha256_text(text: str) -> str:
 def hash_records(records: list) -> str:
     payload = json.dumps(records, ensure_ascii=False, sort_keys=True, default=str)
     return sha256_text(payload)
+
+
+def module_lora_shapes(spec: dict, rank: int) -> dict[str, tuple[tuple[int, int], tuple[int, int]]]:
+    hidden = spec["hidden"]
+    intermediate = spec["intermediate"]
+    head_dim = hidden // spec["heads"]
+    kv_out = spec["kv_heads"] * head_dim
+    return {
+        "q_proj": ((rank, hidden), (hidden, rank)),
+        "k_proj": ((rank, hidden), (kv_out, rank)),
+        "v_proj": ((rank, hidden), (kv_out, rank)),
+        "o_proj": ((rank, hidden), (hidden, rank)),
+        "gate_proj": ((rank, hidden), (intermediate, rank)),
+        "up_proj": ((rank, hidden), (intermediate, rank)),
+        "down_proj": ((rank, intermediate), (hidden, rank)),
+    }
+
+
+def transfer_verdict(source: dict, target: dict) -> dict:
+    names = sorted(set(source) | set(target))
+    mismatched = [name for name in names if source.get(name) != target.get(name)]
+    return {"transfers": not mismatched, "mismatched_modules": mismatched}
+
+
+def qwen25_to_qwen3_transfer(rank: int = 16) -> dict:
+    verdict = transfer_verdict(module_lora_shapes(QWEN25_7B, rank), module_lora_shapes(QWEN3_8B, rank))
+    verdict["source"] = "Qwen2.5-7B-Instruct"
+    verdict["target"] = "Qwen3-8B"
+    verdict["rank"] = rank
+    verdict["reason"] = (
+        "LoRA shapes differ, so a Qwen2.5 adapter cannot load on Qwen3-8B. "
+        "The same data is retrained. That is the transfer result."
+    )
+    return verdict
 
 
 def build_manifest(
@@ -86,10 +128,14 @@ def build_manifest(
     hyperparameters: dict,
     sft: dict,
     dpo: dict | None,
+    run_label: str = "primary",
+    evaluation: dict | None = None,
+    transfer: dict | None = None,
 ) -> dict:
     return {
         "git_sha": git_sha,
         "base_model": base_model,
+        "run_label": run_label,
         "train_sha256": train_sha256,
         "val_sha256": val_sha256,
         "preferences_sha256": preferences_sha256,
@@ -99,6 +145,8 @@ def build_manifest(
         "hyperparameters": hyperparameters,
         "sft": sft,
         "dpo": dpo,
+        "evaluation": evaluation,
+        "transfer": transfer,
     }
 
 
@@ -130,8 +178,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="QLoRA Joker on Qwen2.5-7B-Instruct")
     parser.add_argument(
         "--base-model",
-        default="unsloth/Qwen2.5-7B-Instruct-bnb-4bit",
-        help="Base model. The default is already quantized to 4 bits.",
+        default=CURRENT_BASE,
+        help="4-bit instruct checkpoint. The default is Qwen3-8B. Qwen2.5 stays available as the legacy base.",
     )
     parser.add_argument(
         "--dataset",
@@ -159,6 +207,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dpo-epochs", type=float, default=3)
     parser.add_argument("--dpo-learning-rate", type=float, default=5e-6)
     parser.add_argument("--dpo-beta", type=float, default=0.1)
+    parser.add_argument("--eval-items", default=None, help="Local eval jsonl, or a dataset repo.")
+    parser.add_argument("--eval-data-files", default=None)
+    parser.add_argument("--eval-temperature", type=float, default=0.0)
+    parser.add_argument("--eval-max-new-tokens", type=int, default=280)
+    parser.add_argument("--judge-seed", type=int, default=3407)
+    parser.add_argument("--sft-repo", default="", help="Repo that keeps the SFT adapter when DPO continues.")
+    parser.add_argument("--run-label", default="primary")
     parser.add_argument("--git-sha", default="unknown")
     parser.add_argument("--train-sha", default="")
     parser.add_argument("--val-sha", default="")
@@ -292,8 +347,17 @@ def push_adapter(model, tokenizer, repo: str, private: bool, manifest: dict | No
     )
 
 
-def publish(model, tokenizer, repo: str, private: bool, manifest: dict | None, manifest_name: str, attempts: int) -> None:
-    card = fetch_readme(repo)
+def publish(
+    model,
+    tokenizer,
+    repo: str,
+    private: bool,
+    manifest: dict | None,
+    manifest_name: str,
+    attempts: int,
+    fallback_card: str | None = None,
+) -> None:
+    card = fetch_readme(repo) or fallback_card
     call_with_retries(
         lambda: push_adapter(model, tokenizer, repo, private, manifest, manifest_name),
         attempts=attempts,
@@ -384,7 +448,8 @@ def run_sft(model, tokenizer, train, val, args):
     total_steps = args.max_steps or int(steps_per_epoch * args.num_epochs)
     warmup = max(1, total_steps // 20)
     keeper = KeepBestAdapter()
-    publisher = AdapterPublishCallback(args.output_repo, tokenizer, args.private, args.push_attempts)
+    publish_repo = getattr(args, "sft_publish_repo", None) or args.output_repo
+    publisher = AdapterPublishCallback(publish_repo, tokenizer, args.private, args.push_attempts)
     config = SFTConfig(
         output_dir=args.save_local,
         dataset_text_field="text",
@@ -533,23 +598,119 @@ def run_dpo(model, tokenizer, train, val, args):
     return trainer.model, metrics
 
 
+def load_scorer(dataset: str):
+    local = Path(__file__).resolve().parent / "eval.py"
+    if local.is_file():
+        path = local
+    elif os.path.isfile(dataset):
+        sys.exit("eval.py is not next to train.py, and the dataset is a local file.")
+    else:
+        from huggingface_hub import hf_hub_download
+
+        path = Path(hf_hub_download(repo_id=dataset, filename="eval.py", repo_type="dataset"))
+    spec = importlib.util.spec_from_file_location("joker_eval_job", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def load_eval_items(dataset: str, data_files: str | None) -> list[dict]:
+    items = []
+    for row in load_rows(dataset, data_files):
+        item = {key: row[key] for key in row}
+        for key in ("expect_substrings", "expect_any"):
+            if item.get(key) is None:
+                item.pop(key, None)
+        items.append(item)
+    return items
+
+
+def fallback_card(dataset: str) -> str | None:
+    local = Path(__file__).resolve().parent / "hub" / "model_card_qwen3.md"
+    if local.is_file():
+        return local.read_text(encoding="utf-8")
+    if os.path.isfile(dataset):
+        return None
+    from huggingface_hub import hf_hub_download
+
+    try:
+        path = hf_hub_download(repo_id=dataset, filename="model_card.md", repo_type="dataset")
+    except Exception:
+        logger.warning("No fallback model card on %s", dataset)
+        return None
+    return Path(path).read_text(encoding="utf-8")
+
+
+def generate_condition(model, scorer, tokenizer, items: list[dict], args, enabled: bool) -> dict[str, str]:
+    from unsloth import FastLanguageModel
+
+    FastLanguageModel.for_inference(model)
+    if enabled:
+        return scorer.generate_with_model(
+            model, tokenizer, items, args.eval_max_new_tokens, args.eval_temperature
+        )
+    if not hasattr(model, "disable_adapter"):
+        sys.exit("cannot score the base: this model has no disable_adapter, so the baseline would be the adapter.")
+    with model.disable_adapter():
+        return scorer.generate_with_model(
+            model, tokenizer, items, args.eval_max_new_tokens, args.eval_temperature
+        )
+
+
+def resume_training(model) -> None:
+    from unsloth import FastLanguageModel
+
+    if hasattr(FastLanguageModel, "for_training"):
+        FastLanguageModel.for_training(model)
+
+
+def upload_json(repo: str, name: str, payload: dict) -> None:
+    from huggingface_hub import HfApi
+
+    HfApi().upload_file(
+        path_or_fileobj=json.dumps(payload, indent=2, ensure_ascii=False).encode("utf-8"),
+        path_in_repo=name,
+        repo_id=repo,
+        repo_type="model",
+    )
+
+
+def evaluation_payload(scorer, reports: dict, items: list[dict], args) -> dict:
+    return {
+        "temperature": args.eval_temperature,
+        "max_new_tokens": args.eval_max_new_tokens,
+        "judge_seed": args.judge_seed,
+        "items": len(items),
+        "comparison": scorer.compare_conditions(reports, seed=args.judge_seed),
+    }
+
+
 def main() -> None:
     args = parse_args()
+    sft_destination = args.sft_repo.strip() or args.output_repo
+    args.sft_publish_repo = sft_destination
+    card = fallback_card(args.dataset)
+    transfer = qwen25_to_qwen3_transfer(args.lora_r)
     print("=" * 70)
-    print("Qwen2.5-7B-Instruct · QLoRA · Joker")
+    print("Qwen instruct · QLoRA · Joker")
     print("=" * 70)
     print(f" base:        {args.base_model}")
+    print(f" label:       {args.run_label}")
     print(f" dataset:     {args.dataset}")
     print(f" val:         {args.val_dataset}")
     print(f" preferences: {args.preferences}")
+    print(f" eval:        {args.eval_items or 'skipped'}")
     print(f" epochs:      {args.num_epochs}")
     print(f" dpo epochs:  {args.dpo_epochs if not args.skip_dpo else 'skipped'}")
     print(f" batch:       {args.batch_size} x {args.gradient_accumulation}")
     print(f" seq:         {args.max_seq_length}")
     print(f" LoRA r/a:    {args.lora_r}/{args.lora_alpha}")
+    print(f" seed:        {args.seed}")
     print(f" lr:          {args.learning_rate}")
     print(f" git:         {args.git_sha}")
+    print(f" sft repo:    {sft_destination}")
     print(f" output:      {args.output_repo}")
+    print(f" transfer:    Qwen2.5 adapter on Qwen3: {transfer['transfers']}")
     print(" hardware:    aimed at a10g-large, 1.50 USD/hour")
     print()
 
@@ -612,28 +773,63 @@ def main() -> None:
     print(train[0]["text"][:700])
     print(f"train rows: {len(train)}  val rows: {len(val)}  preference rows: {len(pref_raw)}")
 
+    scorer = None
+    eval_items = None
+    reports: dict[str, dict] = {}
+    if args.eval_items:
+        scorer = load_scorer(args.dataset)
+        eval_items = load_eval_items(args.eval_items, args.eval_data_files)
+        print("\nScoring the base with the same system prompt and no adapter...")
+        replies = generate_condition(model, scorer, tokenizer, eval_items, args, enabled=False)
+        reports["base"] = scorer.write_report("eval_base.json", f"{args.base_model}:base", eval_items, replies)
+        resume_training(model)
+
+    def pack(sft_metrics, dpo_metrics, names: tuple[str, ...]) -> dict:
+        evaluation = None
+        if scorer is not None and reports:
+            chosen = {name: reports[name] for name in names if name in reports}
+            evaluation = evaluation_payload(scorer, chosen, eval_items, args)
+        return build_manifest(
+            git_sha=args.git_sha,
+            base_model=args.base_model,
+            train_sha256=args.train_sha,
+            val_sha256=args.val_sha,
+            preferences_sha256=args.preferences_sha,
+            loaded_train_sha256=loaded_train_sha,
+            loaded_val_sha256=loaded_val_sha,
+            loaded_preferences_sha256=loaded_pref_sha,
+            hyperparameters=hyperparameters_of(args),
+            sft=sft_metrics,
+            dpo=dpo_metrics,
+            run_label=args.run_label,
+            evaluation=evaluation,
+            transfer=transfer,
+        )
+
     print("\n[3/5] Supervised training...")
     model, sft_metrics = run_sft(model, tokenizer, train, val, args)
-    sft_manifest = build_manifest(
-        git_sha=args.git_sha,
-        base_model=args.base_model,
-        train_sha256=args.train_sha,
-        val_sha256=args.val_sha,
-        preferences_sha256=args.preferences_sha,
-        loaded_train_sha256=loaded_train_sha,
-        loaded_val_sha256=loaded_val_sha,
-        loaded_preferences_sha256=loaded_pref_sha,
-        hyperparameters=hyperparameters_of(args),
-        sft=sft_metrics,
-        dpo=None,
-    )
+    if scorer is not None:
+        print("\nScoring the SFT adapter...")
+        replies = generate_condition(model, scorer, tokenizer, eval_items, args, enabled=True)
+        reports["sft"] = scorer.write_report("eval_sft.json", f"{sft_destination}:sft", eval_items, replies)
+        resume_training(model)
+    sft_manifest = pack(sft_metrics, None, ("base", "sft"))
     print("\n[4/5] Publishing the SFT adapter before DPO...")
     try:
-        publish(model, tokenizer, args.output_repo, args.private, sft_manifest, "sft_manifest.json", args.push_attempts)
+        publish(
+            model,
+            tokenizer,
+            sft_destination,
+            args.private,
+            sft_manifest,
+            "sft_manifest.json",
+            args.push_attempts,
+            card,
+        )
     except Exception as exc:
         logger.error("SFT adapter never reached the Hub: %s", exc)
         sys.exit(1)
-    print(f"sft adapter at https://huggingface.co/{args.output_repo}")
+    print(f"sft adapter at https://huggingface.co/{sft_destination}")
 
     dpo_metrics = None
     if args.skip_dpo:
@@ -644,26 +840,60 @@ def main() -> None:
         pref_train, pref_val = preference_views(pref_raw)
         model, dpo_metrics = run_dpo(model, tokenizer, pref_train, pref_val, args)
         collapse_dpo_into_default(model)
+        if scorer is not None:
+            print("\nScoring the DPO adapter...")
+            replies = generate_condition(model, scorer, tokenizer, eval_items, args, enabled=True)
+            reports["dpo"] = scorer.write_report("eval_dpo.json", f"{args.output_repo}:dpo", eval_items, replies)
 
-    manifest = build_manifest(
-        git_sha=args.git_sha,
-        base_model=args.base_model,
-        train_sha256=args.train_sha,
-        val_sha256=args.val_sha,
-        preferences_sha256=args.preferences_sha,
-        loaded_train_sha256=loaded_train_sha,
-        loaded_val_sha256=loaded_val_sha,
-        loaded_preferences_sha256=loaded_pref_sha,
-        hyperparameters=hyperparameters_of(args),
-        sft=sft_metrics,
-        dpo=dpo_metrics,
-    )
+    manifest = pack(sft_metrics, dpo_metrics, ("base", "sft", "dpo"))
+    if manifest["evaluation"] is not None:
+        print(scorer.format_condition_comparison(manifest["evaluation"]["comparison"]))
     print("\nPublishing the finished adapter...")
     try:
-        publish(model, tokenizer, args.output_repo, args.private, manifest, "run_manifest.json", args.push_attempts)
+        publish(
+            model,
+            tokenizer,
+            args.output_repo,
+            args.private,
+            manifest,
+            "run_manifest.json",
+            args.push_attempts,
+            card,
+        )
     except Exception as exc:
         logger.error("finished adapter never reached the Hub: %s", exc)
         sys.exit(1)
+    if reports:
+        delta = {
+            "run_label": args.run_label,
+            "base_model": args.base_model,
+            "git_sha": args.git_sha,
+            "seed": args.seed,
+            "lora_r": args.lora_r,
+            "lora_alpha": args.lora_alpha,
+            "sft_loss": sft_metrics.get("best_eval_loss"),
+            "dpo_loss": None if dpo_metrics is None else dpo_metrics.get("best_eval_loss"),
+            "comparison": manifest["evaluation"]["comparison"],
+        }
+        destinations = [args.output_repo]
+        if sft_destination != args.output_repo:
+            destinations.append(sft_destination)
+        try:
+            for repo in destinations:
+                for name, report in reports.items():
+                    call_with_retries(
+                        lambda repo=repo, name=name, payload=report: upload_json(repo, f"eval_{name}.json", payload),
+                        attempts=args.push_attempts,
+                        pause_seconds=15,
+                    )
+                call_with_retries(
+                    lambda repo=repo, payload=delta: upload_json(repo, "eval_delta.json", payload),
+                    attempts=args.push_attempts,
+                    pause_seconds=15,
+                )
+        except Exception as exc:
+            logger.error("eval files never reached the Hub: %s", exc)
+            sys.exit(1)
     if args.merge_model:
         try:
             merge_repo = resolve_merge_repo(args.output_repo, args.merge_repo)

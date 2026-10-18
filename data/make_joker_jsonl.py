@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import sys
 from pathlib import Path
 
@@ -17,13 +16,13 @@ from heldout import (
     CONVERSATIONS,
     EVAL_ITEMS,
     EXTRA_TRAIN_PAIRS,
-    HAND_PREFERENCES,
     VAL_CONVERSATIONS,
     VAL_PAIRS,
 )
+from preference_author import preference_rows as authored_preferences
+from scale import dialogues
 
 SYSTEM = (ROOT / "system_prompt.txt").read_text(encoding="utf-8").strip()
-PREFERENCE_TAGS = ("emoji_spam", "assistant_voice", "wrong_fact")
 
 PAIRS: list[tuple[str, str]] = [
     (
@@ -589,75 +588,52 @@ def conversation_row(turns: list[tuple[str, str]]) -> dict:
     return {"messages": messages}
 
 
+def user_prompts(rows: list[dict]) -> set[str]:
+    found = set()
+    for row in rows:
+        for message in row["messages"]:
+            if message["role"] == "user":
+                found.add(message["content"].strip())
+    return found
+
+
+def assistant_texts(rows: list[dict]) -> set[str]:
+    found = set()
+    for row in rows:
+        for message in row["messages"]:
+            if message["role"] == "assistant":
+                found.add(message["content"].strip())
+    return found
+
+
+def held_out_prompts() -> set[str]:
+    return {item["prompt"].strip() for item in EVAL_ITEMS}
+
+
 def train_rows() -> list[dict]:
     rows = [conversation_row([(user, assistant)]) for user, assistant in PAIRS]
     rows.extend(conversation_row([(user, assistant)]) for user, assistant in EXTRA_TRAIN_PAIRS)
     rows.extend(conversation_row(turns) for turns in CONVERSATIONS)
+    blocked = user_prompts(rows) | held_out_prompts()
+    blocked |= {user.strip() for user, _assistant in VAL_PAIRS}
+    for turns in VAL_CONVERSATIONS:
+        blocked.update(user.strip() for user, _assistant in turns)
+    rows.extend(conversation_row(turns) for turns in dialogues("train", blocked))
     return rows
 
 
 def val_rows() -> list[dict]:
     rows = [conversation_row([(user, assistant)]) for user, assistant in VAL_PAIRS]
     rows.extend(conversation_row(turns) for turns in VAL_CONVERSATIONS)
+    blocked = user_prompts(train_rows()) | user_prompts(rows) | held_out_prompts()
+    rows.extend(conversation_row(turns) for turns in dialogues("val", blocked))
     return rows
-
-
-def train_lookup() -> dict[str, str]:
-    found: dict[str, str] = {}
-    for user, assistant in [*PAIRS, *EXTRA_TRAIN_PAIRS]:
-        found[user.strip()] = assistant.strip()
-    return found
-
-
-def reject_text(tag: str, assistant: str) -> str:
-    if tag == "emoji_spam":
-        pieces = [piece for piece in re.split(r"(?<=[.!?])\s+", assistant.strip()) if piece]
-        stamped = " ".join(piece if "🤡" in piece else f"{piece} 🤡" for piece in pieces)
-        if stamped == assistant.strip():
-            stamped = f"{stamped} 🤡"
-        return stamped
-    if tag == "assistant_voice":
-        return (
-            "As an AI assistant, here is the direct answer with no character attached. "
-            + assistant.strip().split("\n", 1)[0]
-        )
-    if tag == "wrong_fact":
-        return (
-            "Ha. Forty-two. ... That number is not the answer to what you asked, "
-            "and I am nailing it to the wall anyway. 🃏"
-        )
-    raise ValueError(tag)
-
-
-def preference_row(user: str, chosen: str, rejected: str, tag: str, split: str) -> dict:
-    return {
-        "prompt": [
-            {"role": "system", "content": SYSTEM},
-            {"role": "user", "content": user.strip()},
-        ],
-        "chosen": [{"role": "assistant", "content": chosen.strip()}],
-        "rejected": [{"role": "assistant", "content": rejected.strip()}],
-        "tag": tag,
-        "split": split,
-    }
 
 
 def preference_rows() -> list[dict]:
-    lookup = train_lookup()
-    rows: list[dict] = []
-    singles = [(user.strip(), assistant.strip()) for user, assistant in [*PAIRS, *EXTRA_TRAIN_PAIRS]]
-    for index, (user, assistant) in enumerate(singles):
-        tag = PREFERENCE_TAGS[index % len(PREFERENCE_TAGS)]
-        split = "val" if index % 7 == 0 else "train"
-        rows.append(preference_row(user, assistant, reject_text(tag, assistant), tag, split))
-    for hand in HAND_PREFERENCES:
-        user = hand["user"].strip()
-        if user not in lookup:
-            raise KeyError(user)
-        rows.append(
-            preference_row(user, lookup[user], hand["rejected"], hand["tag"], hand["split"])
-        )
-    return rows
+    dialogues_rows = [*train_rows(), *val_rows()]
+    blocked_prompts = user_prompts(dialogues_rows) | held_out_prompts()
+    return authored_preferences(blocked_prompts, assistant_texts(dialogues_rows))
 
 
 def eval_rows() -> list[dict]:

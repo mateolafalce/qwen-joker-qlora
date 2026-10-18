@@ -28,11 +28,17 @@ else
 fi
 
 DATASET_REPO="${HF_DATASET_REPO:-$HF_USER/qwen-joker-sft}"
-OUTPUT_REPO="${HF_OUTPUT_REPO:-$HF_USER/qwen2.5-7b-joker}"
+OUTPUT_REPO="${HF_OUTPUT_REPO:-$HF_USER/qwen3-8b-joker}"
 FLAVOR="${HF_FLAVOR:-a10g-large}"
-TIMEOUT="${HF_TIMEOUT:-2h}"
+TIMEOUT="${HF_TIMEOUT:-4h}"
 EPOCHS="${HF_EPOCHS:-4}"
 DPO_EPOCHS="${HF_DPO_EPOCHS:-3}"
+LORA_R="${HF_LORA_R:-16}"
+LORA_ALPHA="${HF_LORA_ALPHA:-16}"
+SEED="${HF_SEED:-3407}"
+BATCH="${HF_BATCH:-2}"
+RUN_LABEL="${HF_RUN_LABEL:-primary}"
+BASE_MODEL="${HF_BASE_MODEL:-unsloth/Qwen3-8B-bnb-4bit}"
 
 "$PYTHON" data/make_joker_jsonl.py
 "$PYTHON" scripts/check_data.py
@@ -48,22 +54,33 @@ TRAIN_SHA="$(file_sha data/joker.jsonl)"
 VAL_SHA="$(file_sha data/joker_val.jsonl)"
 PREF_SHA="$(file_sha data/preferences.jsonl)"
 SKIP_DPO=()
+SFT_ARGS=()
 if [[ "${HF_SKIP_DPO:-}" == "1" ]]; then
   SKIP_DPO=(--skip-dpo)
+else
+  SFT_REPO="${HF_SFT_REPO:-$OUTPUT_REPO-sft}"
+  SFT_ARGS=(--sft-repo "$SFT_REPO")
 fi
 
 echo
 echo "This will spend Hugging Face credit."
 echo "  GPU:      ${FLAVOR}  (A10G large is 1.50 USD/hour)"
-echo "  cap:      ${TIMEOUT}  (2 hours is about 3 USD)"
+echo "  cap:      ${TIMEOUT}  (4 hours is about 6 USD)"
+echo "  base:     ${BASE_MODEL}"
+echo "  label:    ${RUN_LABEL}"
 echo "  epochs:   ${EPOCHS} SFT, then ${DPO_EPOCHS} DPO"
+echo "  LoRA:     r ${LORA_R}, alpha ${LORA_ALPHA}, seed ${SEED}, batch ${BATCH}"
 echo "  dataset:  ${DATASET_REPO}"
 echo "  adapter:  https://huggingface.co/${OUTPUT_REPO}"
+if [[ ${#SFT_ARGS[@]} -gt 0 ]]; then
+  echo "  sft:      https://huggingface.co/${SFT_REPO}"
+fi
 echo "  git:      ${GIT_SHA}"
 echo
-echo "With this dataset the train usually finishes well before the cap."
+echo "The job scores the base, the SFT adapter, and DPO when it runs, with the same system prompt."
+echo "It uploads run_manifest.json and eval_delta.json. The delta is the result."
 echo "The build is not billed. If the script fails, the job stops on its own."
-echo "The job exits 0 only after the adapter is on the Hub."
+echo "The job exits 0 only after the adapter and the eval files are on the Hub."
 echo
 
 if [[ "${HF_YES:-}" != "1" ]]; then
@@ -74,25 +91,36 @@ fi
 "$HF_BIN" upload "$DATASET_REPO" data/joker_val.jsonl joker_val.jsonl --repo-type dataset
 "$HF_BIN" upload "$DATASET_REPO" data/preferences.jsonl preferences.jsonl --repo-type dataset
 "$HF_BIN" upload "$DATASET_REPO" data/eval_items.jsonl eval_items.jsonl --repo-type dataset
+"$HF_BIN" upload "$DATASET_REPO" "$ROOT/eval.py" eval.py --repo-type dataset
+"$HF_BIN" upload "$DATASET_REPO" "$ROOT/hub/model_card_qwen3.md" model_card.md --repo-type dataset
 
 "$HF_BIN" jobs uv run "$ROOT/train.py" \
   --flavor "$FLAVOR" \
   --timeout "$TIMEOUT" \
   --secrets HF_TOKEN \
   -- \
+  --base-model "$BASE_MODEL" \
   --dataset "$DATASET_REPO" \
   --data-files joker.jsonl \
   --val-dataset "$DATASET_REPO" \
   --val-data-files joker_val.jsonl \
   --preferences "$DATASET_REPO" \
   --preferences-data-files preferences.jsonl \
+  --eval-items "$DATASET_REPO" \
+  --eval-data-files eval_items.jsonl \
   --output-repo "$OUTPUT_REPO" \
   --num-epochs "$EPOCHS" \
   --dpo-epochs "$DPO_EPOCHS" \
+  --lora-r "$LORA_R" \
+  --lora-alpha "$LORA_ALPHA" \
+  --seed "$SEED" \
+  --batch-size "$BATCH" \
+  --run-label "$RUN_LABEL" \
   --git-sha "$GIT_SHA" \
   --train-sha "$TRAIN_SHA" \
   --val-sha "$VAL_SHA" \
   --preferences-sha "$PREF_SHA" \
+  "${SFT_ARGS[@]}" \
   "${SKIP_DPO[@]}"
 
 echo

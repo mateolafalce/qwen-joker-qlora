@@ -14,11 +14,11 @@
 
 Local, with a GPU:
 
-  uv run infer.py --model YOUR_USER/qwen2.5-7b-joker --prompts data/probe_prompts.txt
+  uv run infer.py --model YOUR_USER/qwen3-8b-joker --prompts data/probe_prompts.txt
 
 A single question:
 
-  uv run infer.py --model YOUR_USER/qwen2.5-7b-joker --question "What is a traffic light?"
+  uv run infer.py --model YOUR_USER/qwen3-8b-joker --question "What is a traffic light?"
 """
 
 from __future__ import annotations
@@ -97,13 +97,19 @@ def main() -> None:
             {"role": "system", "content": system},
             {"role": "user", "content": question},
         ]
-        inputs = tokenizer.apply_chat_template(
-            messages,
-            tokenize=True,
-            add_generation_prompt=True,
-            return_tensors="pt",
-            return_dict=True,
-        ).to(model.device)
+        kwargs = {
+            "tokenize": True,
+            "add_generation_prompt": True,
+            "return_tensors": "pt",
+            "return_dict": True,
+            "enable_thinking": False,
+        }
+        try:
+            inputs = tokenizer.apply_chat_template(messages, **kwargs)
+        except Exception:
+            kwargs.pop("enable_thinking")
+            inputs = tokenizer.apply_chat_template(messages, **kwargs)
+        inputs = inputs.to(model.device)
         generate_kwargs = {
             "max_new_tokens": args.max_new_tokens,
             "do_sample": args.temperature > 0,
