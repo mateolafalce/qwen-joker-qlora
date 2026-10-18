@@ -9,6 +9,8 @@ QLoRA fine-tune of Qwen2.5-7B-Instruct so it answers as the Joker. The base mode
 - Write repo text in English: code strings, docs, prompts, and dataset pairs.
 - Do not run `scripts/launch_job.sh` unless the user explicitly confirms the spend. The default cap is 2 hours on an A10G large, about 3 USD if the job hangs.
 - Use `.venv/bin/python` and `.venv/bin/hf` when they exist.
+- Commit messages and pull request titles follow Conventional Commits: `type: subject` or `type(scope): subject`. Allowed types are `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, and `revert`. The subject is an imperative phrase, starts with a lowercase letter, and does not end with a period. The header stays within 100 characters. Squash-merge pull requests so the commit on `main` uses that title.
+- `scripts/check_conventional_commits.py` enforces the rule. The `conventional commits` workflow runs it on pull requests (the title and every commit) and on pushes to `main`.
 
 ## Layout
 
@@ -23,10 +25,13 @@ QLoRA fine-tune of Qwen2.5-7B-Instruct so it answers as the Joker. The base mode
 ```bash
 .venv/bin/python data/make_joker_jsonl.py
 .venv/bin/python scripts/check_data.py
+.venv/bin/python scripts/check_conventional_commits.py
 HF_USER=your_user ./scripts/launch_job.sh
 ```
 
 `HF_YES=1` skips the spend prompt. Optional overrides: `HF_OUTPUT_REPO`, `HF_DATASET_REPO`, `HF_TIMEOUT`, `HF_EPOCHS`.
+
+`scripts/check_conventional_commits.py` checks `HEAD` by default. Pass `--rev-range base..head` and `--title` to check a pull request the same way CI does.
 
 Default dataset repo: `$HF_USER/qwen-joker-sft`. Default adapter repo: `$HF_USER/qwen2.5-7b-joker`.
 
