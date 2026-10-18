@@ -42,18 +42,21 @@ def check_header(header: str, label: str) -> list[str]:
     return errors
 
 
-def commit_subjects(rev_range: str) -> list[tuple[str, str]]:
+def commit_subjects(rev_range: str, cwd: str | None = None) -> list[tuple[str, str]]:
     result = subprocess.run(
-        ["git", "log", "--format=%h%x09%s", rev_range],
+        ["git", "log", "--format=%h%x09%P%x09%s", rev_range],
         check=True,
         capture_output=True,
         text=True,
+        cwd=cwd,
     )
     rows: list[tuple[str, str]] = []
     for line in result.stdout.splitlines():
         if not line.strip():
             continue
-        sha, subject = line.split("\t", 1)
+        sha, parents, subject = line.split("\t", 2)
+        if len(parents.split()) > 1:
+            continue
         rows.append((sha, subject))
     return rows
 
