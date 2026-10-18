@@ -1,0 +1,20 @@
+name: data and tests
+
+on:
+  pull_request:
+  push:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check data, pins, and the rubric
+        run: |
+          set -eu
+          python3 data/make_joker_jsonl.py --check
+          python3 scripts/check_data.py
+          python3 -m unittest discover -s tests -v

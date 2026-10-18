@@ -1,0 +1,11 @@
+.venv
+.git
+.github
+**/__pycache__
+**/*.pyc
+joker-output
+outputs
+*.log
+.hf-cache
+eval_base.json
+eval_adapter.json
