@@ -116,3 +116,13 @@ The training text does aim at a specific voice: sarcasm, a written pause, a joke
 3. Replace the Unsloth stub with what the model does, the training hyperparameters, the hardware, and the known limit that the system prompt has to be sent.
 4. Publish probe outputs, including a base-model baseline with the same prompt and no adapter.
 5. Optional after that: a Space, a notebook, CO2 for the A10G run, and a GGUF only if a merged checkpoint exists.
+
+## Follow-up the same day
+
+Gaps 1 to 3 were published after the audit, from [hub/model_card.md](../hub/model_card.md) and [hub/dataset_card.md](../hub/dataset_card.md), via `scripts/push_hub_cards.py`. The live model page now shows `pipeline_tag: text-generation`, `library_name: peft`, the dataset link, an adapter relation in the model tree, the system prompt, a load example, the training table, and the limitations. "Use this model" offers a PEFT snippet. The dataset repo has a card. Coverage of the checklist after that publish is **7/10**.
+
+Still open, and the reason the SOTA score stays **2/10**: no probe outputs, no base-model baseline, no benchmark, no `.eval_results/`, no Space, no notebook, no CO2 figure, no GGUF. The page still has no download count, and no Inference Provider hosts the adapter.
+
+Unsloth replaces `README.md` on `push_to_hub`. `publish` in `train.py` downloads the current card before that upload and writes it back, including after the optional merged upload, so the next training job keeps this text.
+
+`main` now also has a validation split and a DPO stage (150 train rows, 19 val rows, 151 preference rows in git). The Hub weights and `lafalce/qwen-joker-sft` are still the earlier supervised upload: 138 rows, no `run_manifest.json`. The card says so. The SOTA score stays 2/10 until a new run publishes probe outputs and a base-model baseline.
