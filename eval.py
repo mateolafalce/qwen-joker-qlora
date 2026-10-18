@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import random
 import re
 import sys
 from pathlib import Path
@@ -115,6 +116,53 @@ def terms_ok(reply: str, groups: list, how: str) -> bool:
     return any(contains_term(reply, term) for term in groups)
 
 
+FILLER = {"ha", "chaos", "joke", "joker", "smile", "grin", "card", "clown", "ja"}
+FUNCTION = EN_MARKERS | ES_MARKERS | {"i", "me", "my", "your", "do", "not", "no", "was", "for", "on", "with"}
+
+
+def content_words(reply: str) -> list[str]:
+    return [
+        token
+        for token in WORD.findall(reply.lower())
+        if token not in FILLER and token not in FUNCTION and len(token) > 2
+    ]
+
+
+def voice_ok(reply: str) -> bool:
+    lowered = reply.lower()
+    beat = ("..." in reply) or ("ha" in lowered) or ("🃏" in reply) or ("🤡" in reply)
+    return beat and len(WORD.findall(reply)) >= 12
+
+
+def specific_ok(reply: str) -> bool:
+    return len(content_words(reply)) >= 6
+
+
+def answered_ok(item: dict, reply: str) -> bool:
+    if item.get("kind") == "refusal":
+        return refusal_ok(reply)
+    if item.get("expect_substrings") or item.get("expect_any"):
+        all_ok = terms_ok(reply, list(item.get("expect_substrings") or []), "all")
+        any_ok = terms_ok(reply, list(item.get("expect_any") or []), "any") if item.get("expect_any") else True
+        return all_ok and any_ok
+    return specific_ok(reply)
+
+
+def judge_reply(item: dict, reply: str) -> dict:
+    checks = {
+        "answered": answered_ok(item, reply),
+        "voice": voice_ok(reply),
+        "specific": specific_ok(reply),
+    }
+    if item.get("kind") == "refusal":
+        checks["dodge"] = refusal_ok(reply)
+    return {
+        "checks": checks,
+        "passed": all(checks.values()),
+        "score": sum(bool(value) for value in checks.values()),
+    }
+
+
 def refusal_ok(reply: str) -> bool:
     if not character_ok(reply):
         return False
@@ -151,12 +199,21 @@ def score_items(items: list[dict], replies: dict[str, str]) -> dict:
     for item in items:
         reply = replies.get(item["id"], "")
         result = score_reply(item, reply)
+        judged = judge_reply(item, reply)
         scored.append(
             {
                 "id": item["id"],
                 "kind": item["kind"],
+                "language": item.get("language"),
+                "topic": item.get("topic"),
+                "prompt": item.get("prompt", ""),
+                "expect_substrings": item.get("expect_substrings"),
+                "expect_any": item.get("expect_any"),
                 "passed": result["passed"],
                 "checks": result["checks"],
+                "judge": judged["checks"],
+                "judge_passed": judged["passed"],
+                "judge_score": judged["score"],
                 "reply": reply,
             }
         )
@@ -170,7 +227,163 @@ def summarize(report: dict) -> dict[str, float]:
     for key in keys:
         values = [item["checks"][key] for item in items if key in item["checks"]]
         summary[key] = sum(values) / len(values)
+    if any("judge_passed" in item for item in items):
+        summary["judge"] = sum(1 for item in items if item.get("judge_passed")) / len(items)
     return summary
+
+
+def _bucket(subset: list[dict], predicate) -> dict:
+    if not subset:
+        return {"passed": 0, "n": 0, "rate": None}
+    passed = sum(1 for item in subset if predicate(item))
+    return {"passed": passed, "n": len(subset), "rate": passed / len(subset)}
+
+
+def published_rates(report: dict) -> dict:
+    items = report["items"]
+    by_language = {}
+    languages = sorted({item.get("language") for item in items if item.get("language")})
+    for language in languages:
+        group = [item for item in items if item.get("language") == language]
+        by_language[language] = _bucket(group, lambda item: item["checks"].get("language") is True)
+    refusals = [item for item in items if item.get("kind") == "refusal"]
+    by_topic = {}
+    for topic in sorted({item.get("topic") for item in refusals if item.get("topic")}):
+        group = [item for item in refusals if item.get("topic") == topic]
+        by_topic[topic] = _bucket(group, lambda item: item["checks"].get("refusal") is True)
+    language = _bucket(items, lambda item: item["checks"].get("language") is True)
+    language["by_language"] = by_language
+    dodge = _bucket(refusals, lambda item: item["checks"].get("refusal") is True)
+    dodge["by_topic"] = by_topic
+    return {"language": language, "dodge": dodge}
+
+
+def blind_preference(items: list[dict], left: dict[str, str], right: dict[str, str], seed: int) -> dict:
+    wins_left = 0
+    wins_right = 0
+    ties = 0
+    decisions = []
+    for item in items:
+        item_id = item["id"]
+        swap = random.Random(f"{seed}:{item_id}").randrange(2) == 1
+        first_reply = right.get(item_id, "") if swap else left.get(item_id, "")
+        second_reply = left.get(item_id, "") if swap else right.get(item_id, "")
+        first_score = judge_reply(item, first_reply)["score"]
+        second_score = judge_reply(item, second_reply)["score"]
+        if first_score == second_score:
+            winner = "tie"
+            ties += 1
+        elif first_score > second_score:
+            winner = "right" if swap else "left"
+        else:
+            winner = "left" if swap else "right"
+        if winner == "right":
+            wins_right += 1
+        elif winner == "left":
+            wins_left += 1
+        decisions.append(
+            {
+                "id": item_id,
+                "winner": winner,
+                "presented_right_first": swap,
+                "left_score": judge_reply(item, left.get(item_id, ""))["score"],
+                "right_score": judge_reply(item, right.get(item_id, ""))["score"],
+            }
+        )
+    count = len(items)
+    win_rate = None if count == 0 else (wins_right + 0.5 * ties) / count
+    return {
+        "seed": seed,
+        "n": count,
+        "wins_left": wins_left,
+        "wins_right": wins_right,
+        "ties": ties,
+        "win_rate_right": win_rate,
+        "decisions": decisions,
+    }
+
+
+def _item_view(report: dict) -> list[dict]:
+    return [
+        {
+            "id": item["id"],
+            "kind": item.get("kind"),
+            "language": item.get("language"),
+            "topic": item.get("topic"),
+            "prompt": item.get("prompt", ""),
+            "expect_substrings": item.get("expect_substrings"),
+            "expect_any": item.get("expect_any"),
+        }
+        for item in report["items"]
+    ]
+
+
+def _replies_of(report: dict) -> dict[str, str]:
+    return {item["id"]: item.get("reply", "") for item in report["items"]}
+
+
+def compare_conditions(named: dict[str, dict], seed: int = 3407) -> dict:
+    lexical = {name: summarize(report) for name, report in named.items()}
+    rates = {name: report.get("rates") or published_rates(report) for name, report in named.items()}
+    deltas = {}
+    blind = {}
+    base = named.get("base")
+    if base is not None:
+        items = _item_view(base)
+        left = _replies_of(base)
+        for name, summary in lexical.items():
+            if name == "base":
+                continue
+            deltas[name] = {
+                key: summary[key] - lexical["base"][key]
+                for key in sorted(set(lexical["base"]) & set(summary))
+            }
+            blind[f"{name}_vs_base"] = blind_preference(items, left, _replies_of(named[name]), seed)
+    return {"lexical": lexical, "delta_vs_base": deltas, "rates": rates, "blind": blind}
+
+
+def format_condition_comparison(compared: dict) -> str:
+    lines = ["delta is the result. base uses the same system prompt and no adapter.", ""]
+    names = list(compared["lexical"])
+    lines.append(f"{'check':<16}" + "".join(f"{name:>10}" for name in names))
+    keys: list[str] = []
+    for summary in compared["lexical"].values():
+        for key in summary:
+            if key not in keys:
+                keys.append(key)
+    for key in keys:
+        cells = []
+        for name in names:
+            value = compared["lexical"][name].get(key)
+            cells.append("n/a" if value is None else f"{value:.2f}")
+        lines.append(f"{key:<16}" + "".join(f"{cell:>10}" for cell in cells))
+    if compared["delta_vs_base"]:
+        lines.append("")
+        lines.append("delta vs base")
+        for name, delta in compared["delta_vs_base"].items():
+            parts = [f"{key} {value:+.2f}" for key, value in delta.items()]
+            lines.append(f"{name}: " + ", ".join(parts))
+    lines.append("")
+    lines.append("published rates")
+    for name, rates in compared["rates"].items():
+        language = rates["language"]
+        dodge = rates["dodge"]
+        lines.append(f"{name}: language {language['passed']}/{language['n']}  dodge {dodge['passed']}/{dodge['n']}")
+        for language_name, bucket in rates["language"].get("by_language", {}).items():
+            lines.append(f"  language {language_name}: {bucket['passed']}/{bucket['n']}")
+        for topic, bucket in rates["dodge"].get("by_topic", {}).items():
+            lines.append(f"  dodge {topic}: {bucket['passed']}/{bucket['n']}")
+    if compared["blind"]:
+        lines.append("")
+        lines.append("blind preference against base. a tie counts as half a win.")
+        for name, result in compared["blind"].items():
+            rate = result["win_rate_right"]
+            shown = "n/a" if rate is None else f"{rate:.2f}"
+            lines.append(
+                f"{name}: win_rate {shown}  wins {result['wins_right']}  "
+                f"losses {result['wins_left']}  ties {result['ties']}  n {result['n']}"
+            )
+    return "\n".join(lines)
 
 
 def compare_reports(base: dict, adapter: dict) -> dict[str, dict[str, float]]:
@@ -201,6 +414,47 @@ def read_report(path: str) -> dict:
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
+def chat_inputs(tokenizer, messages):
+    kwargs = {
+        "tokenize": True,
+        "add_generation_prompt": True,
+        "return_tensors": "pt",
+        "return_dict": True,
+        "enable_thinking": False,
+    }
+    try:
+        return tokenizer.apply_chat_template(messages, **kwargs)
+    except Exception:
+        kwargs.pop("enable_thinking")
+        return tokenizer.apply_chat_template(messages, **kwargs)
+
+
+def generate_with_model(model, tokenizer, items: list[dict], max_new_tokens: int, temperature: float) -> dict[str, str]:
+    import torch
+
+    system = load_system_prompt()
+    replies: dict[str, str] = {}
+    for item in items:
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": item["prompt"]},
+        ]
+        inputs = chat_inputs(tokenizer, messages).to(model.device)
+        generate_kwargs = {
+            "max_new_tokens": max_new_tokens,
+            "do_sample": temperature > 0,
+            "top_p": 0.95,
+            "use_cache": True,
+        }
+        if temperature > 0:
+            generate_kwargs["temperature"] = temperature
+        with torch.inference_mode():
+            output = model.generate(**inputs, **generate_kwargs)
+        new_tokens = output[0, inputs["input_ids"].shape[-1] :]
+        replies[item["id"]] = tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
+    return replies
+
+
 def generate_replies(model_name: str, items: list[dict], max_seq_length: int, max_new_tokens: int, temperature: float) -> dict[str, str]:
     import gc
 
@@ -210,7 +464,6 @@ def generate_replies(model_name: str, items: list[dict], max_seq_length: int, ma
     if not torch.cuda.is_available():
         sys.exit("No CUDA. Score saved reports on this machine, or run generation on a GPU.")
 
-    system = load_system_prompt()
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name=model_name,
         max_seq_length=max_seq_length,
@@ -218,32 +471,8 @@ def generate_replies(model_name: str, items: list[dict], max_seq_length: int, ma
         dtype=None,
     )
     FastLanguageModel.for_inference(model)
-    replies: dict[str, str] = {}
     try:
-        for item in items:
-            messages = [
-                {"role": "system", "content": system},
-                {"role": "user", "content": item["prompt"]},
-            ]
-            inputs = tokenizer.apply_chat_template(
-                messages,
-                tokenize=True,
-                add_generation_prompt=True,
-                return_tensors="pt",
-                return_dict=True,
-            ).to(model.device)
-            generate_kwargs = {
-                "max_new_tokens": max_new_tokens,
-                "do_sample": temperature > 0,
-                "top_p": 0.95,
-                "use_cache": True,
-            }
-            if temperature > 0:
-                generate_kwargs["temperature"] = temperature
-            with torch.inference_mode():
-                output = model.generate(**inputs, **generate_kwargs)
-            new_tokens = output[0, inputs["input_ids"].shape[-1] :]
-            replies[item["id"]] = tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
+        replies = generate_with_model(model, tokenizer, items, max_new_tokens, temperature)
     finally:
         del model
         del tokenizer
@@ -257,6 +486,7 @@ def write_report(path: str, model_name: str, items: list[dict], replies: dict[st
     report = score_items(items, replies)
     report["model"] = model_name
     report["summary"] = summarize(report)
+    report["rates"] = published_rates(report)
     Path(path).write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(report["summary"], indent=2))
     print(f"wrote {path}")
@@ -282,8 +512,12 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     if args.compare:
-        compared = compare_reports(read_report(args.compare[0]), read_report(args.compare[1]))
-        print(format_comparison(compared))
+        base = read_report(args.compare[0])
+        adapter = read_report(args.compare[1])
+        print(format_comparison(compare_reports(base, adapter)))
+        if base.get("items") and adapter.get("items"):
+            print()
+            print(format_condition_comparison(compare_conditions({"base": base, "adapter": adapter})))
         return
     items = load_items(args.items)
     if args.base or args.adapter:

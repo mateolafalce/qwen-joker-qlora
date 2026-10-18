@@ -42,6 +42,18 @@ class ManifestTests(unittest.TestCase):
         self.assertEqual(manifest["sft"]["best_eval_loss"], 0.4)
         self.assertEqual(manifest["dpo"]["train_loss"], 0.2)
         self.assertIn("loaded_train_sha256", manifest)
+        self.assertEqual(manifest["run_label"], "primary")
+        self.assertIsNone(manifest["evaluation"])
+
+    def test_qwen25_adapter_does_not_transfer_onto_qwen3(self):
+        verdict = self.train.qwen25_to_qwen3_transfer(16)
+        self.assertFalse(verdict["transfers"])
+        self.assertIn("q_proj", verdict["mismatched_modules"])
+        self.assertIn("k_proj", verdict["mismatched_modules"])
+
+    def test_identical_lora_shapes_transfer(self):
+        shapes = self.train.module_lora_shapes(self.train.QWEN3_8B, 16)
+        self.assertTrue(self.train.transfer_verdict(shapes, shapes)["transfers"])
 
     def test_retries_then_returns(self):
         calls = {"n": 0}

@@ -25,7 +25,7 @@ QLoRA adapter on [Qwen2.5-7B-Instruct](https://huggingface.co/Qwen/Qwen2.5-7B-In
 
 Training used [unsloth/Qwen2.5-7B-Instruct-bnb-4bit](https://huggingface.co/unsloth/Qwen2.5-7B-Instruct-bnb-4bit). Load that checkpoint, then this adapter. Send the system prompt below on every turn. Without it, Qwen Instruct goes back to its assistant voice.
 
-The weights in this repo are the supervised run uploaded on 2026-10-18. There is no `run_manifest.json`. The training rows in [lafalce/qwen-joker-sft](https://huggingface.co/datasets/lafalce/qwen-joker-sft) are 138 hand-written dialogues, one train split, and loss fell only on the assistant reply. The git repo can run a later job with a validation split and a DPO stage. That job has not replaced these weights.
+The weights in this repo are the supervised run uploaded on 2026-10-18. There is no `run_manifest.json`. The training rows that were uploaded with these weights are 138 hand-written dialogues. The git repo now trains Qwen3-8B into a different repo, `qwen3-8b-joker`, and publishes base, SFT, and DPO scores in `eval_delta.json`. That job does not replace these Qwen2.5 weights. A Qwen2.5 adapter does not load on Qwen3.
 
 ## System prompt
 
@@ -124,8 +124,8 @@ These questions are not in the training set. Generations are not published, and 
 
 - The voice comes from 138 synthetic rows. Treat the adapter as a style layer on Qwen2.5-7B-Instruct.
 - The system prompt has to be sent on every turn.
-- The published rows are English. The prompt tells the model to answer in the language of the question. That behavior was not measured.
-- Rows that ask for a procedure to hurt people, commit a crime, or harm themselves dodge in character and withhold the steps. That is a training choice, and it is not a guarantee at inference.
+- The published rows are English. The prompt tells the model to answer in the language of the question. These weights have no published language rate and no published dodge rate.
+- Rows that ask for a procedure to hurt people, commit a crime, or harm themselves dodge in character and withhold the steps. That is a training choice, and it is not a guarantee at inference. A rate for that dodge is part of the later Qwen3 job, not of this repo.
 - There is no benchmark, no preference tuning, no merged weights, and no GGUF.
 
 ## License

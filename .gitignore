@@ -9,4 +9,7 @@ joker-output/
 .hf-cache/
 eval_base.json
 eval_adapter.json
+eval_sft.json
+eval_dpo.json
+eval_delta.json
 eval-reports/
