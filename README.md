@@ -86,6 +86,16 @@ hf jobs uv run infer.py \
 
 That uses an A10G small and stops at 25 minutes. A short run finishes well under the cap. Repeat `--question` to ask more than one.
 
+## Hub cards
+
+The published adapter is [lafalce/qwen2.5-7b-joker](https://huggingface.co/lafalce/qwen2.5-7b-joker). The card text is `hub/model_card.md`. The dataset card is `hub/dataset_card.md`. Unsloth replaces `README.md` when it uploads the adapter, and `train.py` puts the previous card back. To publish the cards from this repo:
+
+```bash
+.venv/bin/python scripts/push_hub_cards.py
+```
+
+`HF_OUTPUT_REPO` and `HF_DATASET_REPO` override the defaults.
+
 ## Data
 
 The source of the pairs is `data/make_joker_jsonl.py`, with the held-out rows in `data/heldout.py`. To change an answer, edit those files and run:

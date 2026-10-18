@@ -173,6 +173,40 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def fetch_readme(repo_id: str) -> str | None:
+    from huggingface_hub import hf_hub_download
+
+    try:
+        path = hf_hub_download(
+            repo_id=repo_id,
+            filename="README.md",
+            repo_type="model",
+            force_download=True,
+        )
+    except Exception:
+        logger.warning("No model card to keep on %s", repo_id)
+        return None
+    with open(path, encoding="utf-8") as handle:
+        return handle.read()
+
+
+def restore_readme(repo_id: str, text: str | None) -> None:
+    import io
+
+    from huggingface_hub import HfApi
+
+    if not text:
+        return
+    HfApi().upload_file(
+        path_or_fileobj=io.BytesIO(text.encode("utf-8")),
+        path_in_repo="README.md",
+        repo_id=repo_id,
+        repo_type="model",
+        commit_message="restore model card",
+    )
+    logger.info("Restored the model card on %s", repo_id)
+
+
 def load_rows(dataset: str, data_files: str | None):
     from datasets import load_dataset
 
@@ -248,11 +282,16 @@ def push_adapter(model, tokenizer, repo: str, private: bool, manifest: dict | No
 
 
 def publish(model, tokenizer, repo: str, private: bool, manifest: dict | None, manifest_name: str, attempts: int) -> None:
+    card = fetch_readme(repo)
     call_with_retries(
         lambda: push_adapter(model, tokenizer, repo, private, manifest, manifest_name),
         attempts=attempts,
         pause_seconds=15,
     )
+    try:
+        restore_readme(repo, card)
+    except Exception:
+        logger.exception("The adapter is uploaded. The model card was not restored.")
 
 
 class KeepBestAdapter:
@@ -616,6 +655,7 @@ def main() -> None:
         sys.exit(1)
     if args.merge_model:
         print("merging to 16 bits. this lengthens the job and uploads ~15 GB.")
+        card = fetch_readme(args.output_repo)
         try:
             call_with_retries(
                 lambda: model.push_to_hub_merged(
@@ -630,6 +670,10 @@ def main() -> None:
         except Exception as exc:
             logger.error("merge upload failed: %s", exc)
             sys.exit(1)
+        try:
+            restore_readme(args.output_repo, card)
+        except Exception:
+            logger.exception("The merged model is uploaded. The model card was not restored.")
     print(f"adapter at https://huggingface.co/{args.output_repo}")
     print("=" * 70)
 
