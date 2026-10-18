@@ -40,6 +40,20 @@ uv run infer.py --model your_user/qwen2.5-7b-joker --prompts data/probe_prompts.
 
 Those questions are not in the training set. They show whether the voice holds on new topics.
 
+Without a GPU, run the same script as a Hugging Face job. `infer.py` stops if CUDA is missing. The job uploads only the script, so pass the question on the command line. The system prompt already lives inside `infer.py`.
+
+```bash
+hf jobs uv run infer.py \
+  --flavor a10g-small \
+  --timeout 25m \
+  --secrets HF_TOKEN \
+  -- \
+  --model your_user/qwen2.5-7b-joker \
+  --question "What is the purpose of life?"
+```
+
+That uses an A10G small and stops at 25 minutes. A short run finishes well under the cap. Repeat `--question` to ask more than one.
+
 ## Data
 
 The source of the pairs is `data/make_joker_jsonl.py`. To change an answer, edit that file and run:
