@@ -10,7 +10,7 @@ QLoRA fine-tune of Qwen2.5-7B-Instruct so it answers as the Joker. The base mode
 - Do not run `scripts/launch_job.sh` unless the user explicitly confirms the spend. The default cap is 2 hours on an A10G large, about 3 USD if the job hangs.
 - Use `.venv/bin/python` and `.venv/bin/hf` when they exist.
 - Commit messages and pull request titles follow Conventional Commits: `type: subject` or `type(scope): subject`. Allowed types are `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, and `revert`. The subject is an imperative phrase, starts with a lowercase letter, and does not end with a period. The header stays within 100 characters. Squash-merge pull requests so the commit on `main` uses that title.
-- `scripts/check_conventional_commits.py` enforces the rule. The `conventional commits` workflow runs it on pull requests (the title and every commit) and on pushes to `main`.
+- `scripts/check_conventional_commits.py` enforces the rule. The `conventional commits` workflow runs it on pull requests (the title and every commit) and on pushes to `main`. Merge commits are skipped, because GitHub writes their subject. Squash commits and normal commits are still checked.
 
 ## Layout
 
