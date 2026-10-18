@@ -1,13 +1,29 @@
 #!/usr/bin/env python3
-"""Build data/joker.jsonl from the system prompt and the pairs below."""
+"""Build the train, val, preference, and eval jsonl files."""
 
 from __future__ import annotations
 
+import argparse
 import json
+import re
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from heldout import (
+    CONVERSATIONS,
+    EVAL_ITEMS,
+    EXTRA_TRAIN_PAIRS,
+    HAND_PREFERENCES,
+    VAL_CONVERSATIONS,
+    VAL_PAIRS,
+)
+
 SYSTEM = (ROOT / "system_prompt.txt").read_text(encoding="utf-8").strip()
+PREFERENCE_TAGS = ("emoji_spam", "assistant_voice", "wrong_fact")
 
 PAIRS: list[tuple[str, str]] = [
     (
@@ -565,19 +581,126 @@ PAIRS: list[tuple[str, str]] = [
 ]
 
 
+def conversation_row(turns: list[tuple[str, str]]) -> dict:
+    messages: list[dict[str, str]] = [{"role": "system", "content": SYSTEM}]
+    for user, assistant in turns:
+        messages.append({"role": "user", "content": user.strip()})
+        messages.append({"role": "assistant", "content": assistant.strip()})
+    return {"messages": messages}
+
+
+def train_rows() -> list[dict]:
+    rows = [conversation_row([(user, assistant)]) for user, assistant in PAIRS]
+    rows.extend(conversation_row([(user, assistant)]) for user, assistant in EXTRA_TRAIN_PAIRS)
+    rows.extend(conversation_row(turns) for turns in CONVERSATIONS)
+    return rows
+
+
+def val_rows() -> list[dict]:
+    rows = [conversation_row([(user, assistant)]) for user, assistant in VAL_PAIRS]
+    rows.extend(conversation_row(turns) for turns in VAL_CONVERSATIONS)
+    return rows
+
+
+def train_lookup() -> dict[str, str]:
+    found: dict[str, str] = {}
+    for user, assistant in [*PAIRS, *EXTRA_TRAIN_PAIRS]:
+        found[user.strip()] = assistant.strip()
+    return found
+
+
+def reject_text(tag: str, assistant: str) -> str:
+    if tag == "emoji_spam":
+        pieces = [piece for piece in re.split(r"(?<=[.!?])\s+", assistant.strip()) if piece]
+        stamped = " ".join(piece if "🤡" in piece else f"{piece} 🤡" for piece in pieces)
+        if stamped == assistant.strip():
+            stamped = f"{stamped} 🤡"
+        return stamped
+    if tag == "assistant_voice":
+        return (
+            "As an AI assistant, here is the direct answer with no character attached. "
+            + assistant.strip().split("\n", 1)[0]
+        )
+    if tag == "wrong_fact":
+        return (
+            "Ha. Forty-two. ... That number is not the answer to what you asked, "
+            "and I am nailing it to the wall anyway. 🃏"
+        )
+    raise ValueError(tag)
+
+
+def preference_row(user: str, chosen: str, rejected: str, tag: str, split: str) -> dict:
+    return {
+        "prompt": [
+            {"role": "system", "content": SYSTEM},
+            {"role": "user", "content": user.strip()},
+        ],
+        "chosen": [{"role": "assistant", "content": chosen.strip()}],
+        "rejected": [{"role": "assistant", "content": rejected.strip()}],
+        "tag": tag,
+        "split": split,
+    }
+
+
+def preference_rows() -> list[dict]:
+    lookup = train_lookup()
+    rows: list[dict] = []
+    singles = [(user.strip(), assistant.strip()) for user, assistant in [*PAIRS, *EXTRA_TRAIN_PAIRS]]
+    for index, (user, assistant) in enumerate(singles):
+        tag = PREFERENCE_TAGS[index % len(PREFERENCE_TAGS)]
+        split = "val" if index % 7 == 0 else "train"
+        rows.append(preference_row(user, assistant, reject_text(tag, assistant), tag, split))
+    for hand in HAND_PREFERENCES:
+        user = hand["user"].strip()
+        if user not in lookup:
+            raise KeyError(user)
+        rows.append(
+            preference_row(user, lookup[user], hand["rejected"], hand["tag"], hand["split"])
+        )
+    return rows
+
+
+def eval_rows() -> list[dict]:
+    return EVAL_ITEMS
+
+
+def dumps(rows: list[dict]) -> str:
+    return "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows)
+
+
+def rendered_files() -> dict[str, str]:
+    return {
+        "joker.jsonl": dumps(train_rows()),
+        "joker_val.jsonl": dumps(val_rows()),
+        "preferences.jsonl": dumps(preference_rows()),
+        "eval_items.jsonl": dumps(eval_rows()),
+    }
+
+
 def main() -> None:
-    out = ROOT / "joker.jsonl"
-    with out.open("w", encoding="utf-8") as handle:
-        for user, assistant in PAIRS:
-            row = {
-                "messages": [
-                    {"role": "system", "content": SYSTEM},
-                    {"role": "user", "content": user.strip()},
-                    {"role": "assistant", "content": assistant.strip()},
-                ]
-            }
-            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
-    print(f"wrote {len(PAIRS)} rows to {out}")
+    parser = argparse.ArgumentParser(description="Write or check the Joker jsonl files")
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="Fail if the committed jsonl files differ from the generator.",
+    )
+    args = parser.parse_args()
+    files = rendered_files()
+    if args.check:
+        stale = []
+        for name, text in files.items():
+            path = ROOT / name
+            current = path.read_text(encoding="utf-8") if path.is_file() else ""
+            if current != text:
+                stale.append(name)
+        if stale:
+            sys.exit("jsonl out of date: " + ", ".join(stale) + ". Run data/make_joker_jsonl.py")
+        print("ok: jsonl matches the generator")
+        return
+    for name, text in files.items():
+        path = ROOT / name
+        path.write_text(text, encoding="utf-8")
+        print(f"wrote {text.count(chr(10))} rows to {path.name}")
 
 
 if __name__ == "__main__":

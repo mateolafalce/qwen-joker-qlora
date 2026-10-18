@@ -1,8 +1,13 @@
 # /// script
 # requires-python = ">=3.10"
 # dependencies = [
-#   "unsloth",
+#   "unsloth==2026.10.6",
+#   "unsloth_zoo==2026.10.6",
 #   "transformers==4.57.3",
+#   "peft==0.18.1",
+#   "accelerate==1.11.0",
+#   "bitsandbytes==0.48.2",
+#   "huggingface_hub[hf_transfer]==0.36.2",
 # ]
 # ///
 """Talk to the Joker adapter. Always sends the same system prompt used in training.
