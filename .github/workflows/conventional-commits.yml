@@ -1,0 +1,37 @@
+name: conventional commits
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check commits and pull request title
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BEFORE_SHA: ${{ github.event.before }}
+          AFTER_SHA: ${{ github.event.after }}
+        run: |
+          set -eu
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            python3 scripts/check_conventional_commits.py \
+              --rev-range "$BASE_SHA..$HEAD_SHA" \
+              --title "$PR_TITLE"
+          elif [ "$BEFORE_SHA" = "0000000000000000000000000000000000000000" ]; then
+            python3 scripts/check_conventional_commits.py --rev-range HEAD
+          else
+            python3 scripts/check_conventional_commits.py --rev-range "$BEFORE_SHA..$AFTER_SHA"
+          fi
