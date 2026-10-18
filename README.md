@@ -1,5 +1,9 @@
 # qwen-joker-qlora
 
+<p align="center">
+  <img src="assets/logo.jpg" alt="Playing card with laughing jesters and the word QLoRA" width="280">
+</p>
+
 Fine-tune of [Qwen2.5-7B-Instruct](https://huggingface.co/Qwen/Qwen2.5-7B-Instruct) with Unsloth and QLoRA, so it answers any question in the Joker's voice. The base stays frozen in 4-bit. A small adapter is what gets trained.
 
 The Hugging Face job does not start on its own. `scripts/launch_job.sh` asks for confirmation because it spends credit.
